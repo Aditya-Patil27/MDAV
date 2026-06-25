@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/mdav
+      - JWT_SECRET=mdav-dev-secret-key
+      - STORAGE_PATH=/app/storage
+    depends_on:
+      - db
+    volumes:
+      - ./storage:/app/storage
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=mdav
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  ml_service:
+    build: ./ml_service
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ml_service/models:/app/models
+
+volumes:
+  pgdata:
