@@ -93,3 +93,19 @@ export async function getRecentHistory(): Promise<HistoryItem[]> {
   if (!response.ok) throw new Error("Failed to fetch history");
   return response.json();
 }
+
+export interface AuditTrail {
+  id: string;
+  document_hash: string;
+  verification_timestamp: string;
+  verification_status: string;
+  authenticity_score: number;
+  previous_hash: string | null;
+  block_hash: string;
+}
+
+export async function getAuditTrail(id: string): Promise<AuditTrail> {
+  const response = await fetch(`${API_BASE}/api/documents/${id}/audit`);
+  if (!response.ok) throw new Error("Failed to fetch audit trail");
+  return response.json();
+}
