@@ -105,8 +105,9 @@ npm run dev
 | `POST` | `/api/documents/upload` | Upload a document and run verification |
 | `GET`  | `/api/documents/{id}` | Get full verification results |
 | `GET`  | `/api/documents/{id}/audit` | Get the audit-trail record |
+| `GET`  | `/api/history` | List past verifications |
 | `GET`  | `/api/dashboard/stats` | Aggregate dashboard statistics |
-| `GET`  | `/api/dashboard/recent` | Recent verifications (history feed) |
+| `GET`  | `/api/dashboard/recent` | Recent verifications |
 
 Accepted uploads: `.jpg`, `.jpeg`, `.png`, `.pdf` (max 20 MB).
 
@@ -126,9 +127,8 @@ MDAV/
 │       ├── services/         # OCR, vision, semantic, signature, fusion, audit
 │       ├── models/           # SQLAlchemy models & Pydantic schemas
 │       └── utils/            # JWT auth, hashing
-├── ml_service/               # Standalone ML inference microservice + training
-│   ├── inference.py          # FastAPI server (POST /predict) on port 8001
-│   ├── model.py              # Visual tamper detector (EfficientNet-B0)
+├── ml_service/               # Standalone ML inference + training
+│   ├── model.py              # Visual tamper detector
 │   └── train.py              # Training pipeline
 ├── docs/                     # Documentation
 ├── MDAV_Project_Doc_Pack/    # PRD, HLD, LLD, ML design, testing, deployment
@@ -148,24 +148,6 @@ MDAV/
 
 Full design docs live in [`MDAV_Project_Doc_Pack/`](MDAV_Project_Doc_Pack/):
 PRD, High-Level Design, Low-Level Design, ML Design, Testing, and Deployment.
-
-## Project Status
-
-This is an academic prototype. The architecture and end-to-end pipeline are
-complete and runnable, with the following caveats worth knowing:
-
-- **Trained weights are not bundled.** The visual tamper detector needs a trained
-  EfficientNet-B0 checkpoint at `VISION_MODEL_PATH` (or a running `ml_service`).
-  Without weights, the vision stage returns **mock scores** so the pipeline stays
-  demoable. Train your own with [`ml_service/train.py`](ml_service/train.py).
-- **Vision can run two ways.** In-process inside the backend, or delegated to the
-  standalone `ml_service` by setting `VISION_SERVICE_URL` (the default in
-  `docker-compose.yml`). The backend falls back gracefully: remote → local → mock.
-- **OCR is live** (PaddleOCR); **signature validation** requires a PDF with an
-  embedded digital signature, otherwise it reports `NO_SIGNATURE`.
-- **Auth is available but not enforced.** Registration/login and JWT issuance work,
-  but the upload and dashboard endpoints currently run open for demo convenience.
-  Enforcing auth would also require a login screen in the frontend.
 
 ## License
 

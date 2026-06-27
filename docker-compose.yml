@@ -18,10 +18,8 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/mdav
       - JWT_SECRET=mdav-dev-secret-key
       - STORAGE_PATH=/app/storage
-      - VISION_SERVICE_URL=http://ml_service:8001
     depends_on:
       - db
-      - ml_service
     volumes:
       - ./storage:/app/storage
 

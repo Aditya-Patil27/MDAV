@@ -1,23 +1,13 @@
-import os
-
 import torch
 import torch.nn as nn
 from torchvision import transforms, models
 from PIL import Image
+import os
 
 
 class VisionService:
-    """Visual tamper detection.
-
-    Resolution order for an analysis:
-      1. Remote ML microservice (VISION_SERVICE_URL), if reachable.
-      2. In-process EfficientNet-B0 weights (VISION_MODEL_PATH), if present.
-      3. Mock scores, so the pipeline stays usable without trained weights.
-    """
-
     def __init__(self, model_path: str = None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.service_url = os.getenv("VISION_SERVICE_URL")
         self.model = None
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
@@ -25,7 +15,6 @@ class VisionService:
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        model_path = model_path or os.getenv("VISION_MODEL_PATH")
         if model_path and os.path.exists(model_path):
             self._load_model(model_path)
 
@@ -38,41 +27,9 @@ class VisionService:
         self.model.eval()
 
     def analyze(self, image_path: str) -> dict:
-        if self.service_url:
-            remote = self._analyze_remote(image_path)
-            if remote is not None:
-                return remote
+        if self.model is None:
+            return self._mock_analysis(image_path)
 
-        if self.model is not None:
-            return self._analyze_local(image_path)
-
-        return self._mock_analysis(image_path)
-
-    def _analyze_remote(self, image_path: str) -> dict | None:
-        try:
-            import httpx
-
-            with open(image_path, "rb") as f:
-                files = {"file": (os.path.basename(image_path), f)}
-                response = httpx.post(
-                    f"{self.service_url.rstrip('/')}/predict",
-                    files=files,
-                    timeout=30.0,
-                )
-            response.raise_for_status()
-            data = response.json()
-            tamper_prob = data.get("probabilities", {}).get("tampered", 0.5)
-
-            return {
-                "tamper_probability": tamper_prob,
-                "confidence": data.get("confidence", 0.0),
-                "heatmap_path": None,
-                "explanation": self._generate_explanation(tamper_prob),
-            }
-        except Exception:
-            return None
-
-    def _analyze_local(self, image_path: str) -> dict:
         try:
             image = Image.open(image_path).convert("RGB")
             input_tensor = self.transform(image).unsqueeze(0).to(self.device)
