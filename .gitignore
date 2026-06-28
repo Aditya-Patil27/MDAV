@@ -6,3 +6,15 @@ __pycache__/
 storage/
 models/*.pt
 .env.local
+
+# Datasets — never commit (real PII: real Aadhaar card images)
+AADHAAR-CARD-DETAILS.coco/
+*.coco/
+datasets/
+ml_service/data/*
+!ml_service/data/.gitkeep
+
+# Model weights & training outputs — handed over separately, never committed
+*.pt
+*.pth
+runs/
