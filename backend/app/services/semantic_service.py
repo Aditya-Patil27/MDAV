@@ -1,5 +1,7 @@
 from datetime import datetime, date
 
+from app.services.belief import BeliefMass, from_check, fuse, vacuous
+
 
 class SemanticValidator:
     def __init__(self):
@@ -55,6 +57,44 @@ class SemanticValidator:
         results["consistency_score"] = sum(scores) / len(scores) if scores else 0.5
 
         return results
+
+    def to_belief(self, validation_result: dict) -> BeliefMass:
+        """Convert a ``validate()`` result into a Dempster-Shafer belief mass.
+
+        Each deterministic check becomes one piece of evidence, combined via
+        Dempster's rule. The asymmetry is deliberate (see ``from_check``): a
+        passing checksum is weak support for authenticity, while a *failing*
+        checksum -- which a genuine document can never produce -- is strong
+        evidence of forgery or OCR corruption. Checks that did not run
+        (``None``) contribute nothing instead of a misleading 0.5 vote.
+        """
+        evidence = []
+        # Verhoeff failure is near-conclusive; passing is only weak support.
+        if validation_result.get("aadhaar_valid") is not None:
+            evidence.append(from_check(
+                validation_result["aadhaar_valid"],
+                w_pass=0.55, w_fail=0.95, source="semantic.aadhaar",
+            ))
+        # PAN format is a regex -> a forger trivially satisfies it; weak both ways.
+        if validation_result.get("pan_valid") is not None:
+            evidence.append(from_check(
+                validation_result["pan_valid"],
+                w_pass=0.40, w_fail=0.75, source="semantic.pan",
+            ))
+        if validation_result.get("dates_valid") is not None:
+            evidence.append(from_check(
+                validation_result["dates_valid"],
+                w_pass=0.35, w_fail=0.70, source="semantic.dates",
+            ))
+        if validation_result.get("field_presence_valid") is not None:
+            evidence.append(from_check(
+                validation_result["field_presence_valid"],
+                w_pass=0.25, w_fail=0.55, source="semantic.fields",
+            ))
+
+        if not evidence:
+            return vacuous(source="semantic")
+        return fuse(evidence)
 
     def _validate_aadhaar(self, aadhaar_number: str) -> bool:
         aadhaar_number = aadhaar_number.replace(" ", "")
