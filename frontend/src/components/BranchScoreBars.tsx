@@ -1,56 +1,84 @@
-// Per-branch score breakdown for the fused authenticity decision.
-// Weights mirror backend fusion logic: visual 0.40, semantic 0.35, signature 0.25.
-// When no signature is present the backend reweights to visual 0.60 / semantic 0.40.
+// Per-branch breakdown for the fused authenticity decision.
+//
+// The backend fuses branches with Dempster-Shafer, discounting each by a source
+// *reliability* (not an additive weight). Each bar shows that branch's pignistic
+// P(authentic). Branches that did not contribute (vacuous / pending / inactive)
+// are dimmed. Renders generically from `fused.branches`, so new branches (e.g.
+// the AIForge diffusion model) appear automatically once the backend emits them.
 
-interface FusedScores {
-  visual_score: number | null;
-  semantic_score: number | null;
-  signature_score: number | null;
+import type { BranchInfo, BranchStatus } from "@/types";
+
+// Structural subset of FusedResult this component needs -- kept loose so callers
+// with a plain `decision: string` (e.g. the results page) type-check cleanly.
+interface FusedLike {
+  visual_score: number;
+  semantic_score: number;
+  signature_score: number;
+  branches?: Record<string, BranchInfo> | null;
 }
 
-const BARS = [
-  { key: "visual_score", label: "Visual Forensics", weight: 0.4, color: "bg-blue-500" },
-  { key: "semantic_score", label: "OCR & Semantic", weight: 0.35, color: "bg-teal-500" },
-  { key: "signature_score", label: "Digital Signature", weight: 0.25, color: "bg-purple-500" },
-] as const;
+// Display order + reliability (mirrors backend RELIABILITY) + bar colour.
+const ORDER: { key: string; reliability: number; color: string }[] = [
+  { key: "signature", reliability: 0.95, color: "bg-purple-500" },
+  { key: "qr", reliability: 0.9, color: "bg-pink-500" },
+  { key: "visual", reliability: 0.85, color: "bg-blue-500" },
+  { key: "diffusion", reliability: 0.8, color: "bg-amber-500" },
+  { key: "semantic", reliability: 0.7, color: "bg-teal-500" },
+  { key: "layout", reliability: 0.4, color: "bg-slate-400" },
+];
 
-export default function BranchScoreBars({
-  fused,
-  signaturePresent,
-}: {
-  fused: FusedScores;
-  signaturePresent: boolean;
-}) {
-  // Reflect the reweighted split the backend applies when no signature exists.
-  const weights = signaturePresent
-    ? { visual_score: 0.4, semantic_score: 0.35, signature_score: 0.25 }
-    : { visual_score: 0.6, semantic_score: 0.4, signature_score: 0 };
+const STATUS_LABEL: Record<BranchStatus, string> = {
+  active: "",
+  inactive: "not present",
+  mock: "model offline",
+  pending: "awaiting model",
+  error: "error",
+};
+
+// Fallback when the backend hasn't sent the rich `branches` payload yet.
+function legacyBranches(fused: FusedLike): Record<string, BranchInfo> {
+  const mk = (label: string, score: number | null | undefined): BranchInfo => ({
+    label,
+    score: score ?? 0.5,
+    belief: null,
+    status: "active",
+    detail: {},
+  });
+  return {
+    visual: mk("Visual Forensics", fused.visual_score),
+    semantic: mk("OCR & Semantic", fused.semantic_score),
+    signature: mk("Digital Signature", fused.signature_score),
+  };
+}
+
+export default function BranchScoreBars({ fused }: { fused: FusedLike }) {
+  const branches = fused.branches ?? legacyBranches(fused);
 
   return (
     <div className="space-y-4">
-      {BARS.map(({ key, label, color }) => {
-        const score = fused[key];
-        const weight = weights[key];
-        const isInactive = key === "signature_score" && !signaturePresent;
-        const pct = score != null ? Math.max(0, Math.min(1, score)) * 100 : 0;
+      {ORDER.filter(({ key }) => branches[key]).map(({ key, reliability, color }) => {
+        const b = branches[key];
+        const inactive = b.status !== "active";
+        const pct = Math.max(0, Math.min(1, b.score ?? 0.5)) * 100;
+        const note = STATUS_LABEL[b.status];
 
         return (
-          <div key={key} className={isInactive ? "opacity-50" : ""}>
+          <div key={key} className={inactive ? "opacity-50" : ""}>
             <div className="mb-1 flex items-center justify-between text-sm">
               <span className="text-gray-700">
-                {label}
+                {b.label}
                 <span className="ml-2 text-xs text-gray-400">
-                  weight {(weight * 100).toFixed(0)}%
+                  reliability {(reliability * 100).toFixed(0)}%
                 </span>
               </span>
               <span className="font-medium text-gray-900">
-                {isInactive ? "n/a" : score != null ? `${pct.toFixed(0)}%` : "—"}
+                {note ? note : `${pct.toFixed(0)}%`}
               </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
               <div
                 className={`h-full rounded-full ${color}`}
-                style={{ width: `${pct}%`, transition: "width 0.6s ease" }}
+                style={{ width: note ? "0%" : `${pct}%`, transition: "width 0.6s ease" }}
               />
             </div>
           </div>

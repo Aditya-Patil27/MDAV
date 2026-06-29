@@ -1,6 +1,6 @@
 """Standalone ML inference service for visual tamper detection.
 
-Exposes the EfficientNet-B0 VisualTamperDetector over HTTP so the backend can
+Exposes the DocTamper VisualTamperDetector over HTTP so the backend can
 call it as a microservice. If no trained weights are present at MODEL_PATH the
 service returns a clearly-flagged mock prediction so the pipeline stays usable
 in demo mode.
@@ -12,11 +12,11 @@ from fastapi import FastAPI, File, UploadFile
 
 from model import VisualTamperDetector
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/app/models/vision_best.pt")
+MODEL_PATH = os.getenv("MDAV_VISION_WEIGHTS", os.getenv("MODEL_PATH", "/app/models/best.pth"))
 
 app = FastAPI(
     title="MDAV ML Service",
-    description="Visual tamper detection (EfficientNet-B0)",
+    description="Visual tamper localization (DocTamper DCT+RGB U-Net)",
     version="1.0.0",
 )
 

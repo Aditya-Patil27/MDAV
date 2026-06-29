@@ -16,54 +16,78 @@ Adish S. Nair, Aditya P. Patil · Guide: Prof. Dr. Jyoti Kanjalkar
 ## Overview
 
 MDAV verifies the authenticity of scanned or photographed government documents
-(Aadhaar, PAN, passport, driving licence) by combining **four independent
-signals** and fusing them into a single, explainable trust decision. Every
-verification is recorded in a **SHA-256 hash-chained audit log**, so results are
-tamper-evident and reproducible.
+(Aadhaar, PAN, passport, driving licence) by combining **six independent
+branches** and fusing them with **Dempster-Shafer evidence theory** into a single,
+explainable trust decision. Every verification is recorded in a **SHA-256
+hash-chained audit log**, so results are tamper-evident and reproducible.
 
 Instead of relying on a single model, MDAV cross-checks a document the way a
-human reviewer would — *Does the image look edited? Do the fields make sense? Is
+human reviewer would — *Does the image look edited? Is any region AI-generated?
+Do the fields make sense? Is the QR's signed data consistent with the print? Is
 the digital signature valid?* — and explains **why** it reached its decision.
 
 ## How It Works
 
-A single upload runs through a five-stage pipeline:
+A single upload fans out across independent branches, each emitting a
+Dempster-Shafer **belief mass** over `{AUTHENTIC, FORGED}`:
 
 ```
-Upload ─▶ Preprocess ─▶ ┌─ OCR + Semantic validation  (field/format checks)
-                        ├─ Vision tamper detection      (EfficientNet-B0)
-                        └─ Digital signature check       (pyHanko / X.509)
+Upload ─▶ Layout (YOLO) ─▶ field crops ─▶ OCR ─▶ ┌─ Semantic checksums (Aadhaar/PAN/dates)
+                                                  ├─ Aadhaar Secure-QR cross-check
+                          Visual tamper (DocTamper U-Net) ─┤
+                          AI/diffusion forgery (AIForge) ──┤
+                          Digital signature (pyHanko/X.509)─┘
                                       │
+                          Dempster-Shafer fusion  (per-source reliability discount)
                                       ▼
-                              Score Fusion ─▶ Decision ─▶ Hash-chained Audit Log
+                              Decision ─▶ Hash-chained Audit Log
+                                      │
+                          Reviewer feedback ─▶ online reliability calibration
 ```
 
-### Signals
+### Branches
 
-| Signal | What it checks | Tech |
+| Branch | What it checks | Tech |
 |--------|----------------|------|
-| **OCR** | Extracts raw text and structured fields | PaddleOCR |
-| **Semantic** | Validates Aadhaar/PAN formats, dates, required fields | Rule-based validator |
-| **Vision** | Probability that the image was digitally tampered | PyTorch · EfficientNet-B0 |
+| **Layout** | Localizes Aadhaar fields; crops feed OCR | YOLOv8n (Ultralytics) |
+| **OCR + Semantic** | Extracts fields; validates Aadhaar (Verhoeff)/PAN/dates | PaddleOCR + rule validator |
+| **Visual** | Per-pixel *classical* tamper localization (copy-move/splice) | DCT+RGB ResNet18 U-Net (DocTamper) |
+| **AIForge** | AI-generated / diffusion-inpainted content *(branch slot — model WIP)* | PyTorch *(see [`docs/AIForge_Agent_Brief.md`](docs/AIForge_Agent_Brief.md))* |
+| **Secure QR** | Decodes the signed Aadhaar QR, cross-checks vs printed fields | UIDAI Secure QR v2 + RSA |
 | **Signature** | Detects & validates embedded digital signatures | pyHanko · cryptography |
 
-### Decision Fusion
+### Decision Fusion (Dempster-Shafer)
 
-Signal scores are combined into a final authenticity score in `[0, 1]`
-([`fusion_service.py`](backend/app/services/fusion_service.py)):
+Each branch emits a belief mass; fusion discounts it by a per-source
+**reliability** and combines everything with Dempster's rule
+([`fusion_service.py`](backend/app/services/fusion_service.py),
+[`belief.py`](backend/app/services/belief.py)). Discounting (not additive
+weighting) means an unreliable branch decays toward *"don't know"* rather than
+voting 0.5 — so one conclusive forensic signal (broken signature, QR/print
+mismatch) overrides a pile of soft heuristics.
 
-- **With** a digital signature: `0.40·visual + 0.35·semantic + 0.25·signature`
-- **Without** a signature: `0.60·visual + 0.40·semantic`
+The fused belief's **pignistic** probability maps to a decision:
 
-The final score maps to a decision:
-
-| Score | Decision |
+| P(authentic) | Decision |
 |-------|----------|
 | ≥ 0.80 | ✅ `APPROVED` |
 | 0.50 – 0.80 | ⚠️ `FLAGGED` |
 | < 0.50 | ⛔ `REVIEW_REQUIRED` |
 
-Each result ships with a plain-language `reason_summary` explaining the outcome.
+Each result ships with a plain-language `reason_summary` and the per-branch
+belief masses + inter-branch conflict.
+
+### Online reliability calibration
+
+Source reliabilities are not fixed. Reviewer-confirmed labels (`POST
+/api/documents/{id}/feedback`) feed an offline calibrator
+([`reliability_calibrator.py`](backend/app/services/reliability_calibrator.py))
+that re-estimates each branch's reliability under an **asymmetric cost** (a
+false-accept of a forgery is far costlier than a false-reject) and proposes new
+values behind a **champion/challenger** gate. Run it with
+`python -m scripts.calibrate_reliability` (`--promote` to apply). The DS fusion
+and audit chain stay fully explainable — only the interpretable reliability
+parameters are learned.
 
 ## Quick Start
 
@@ -103,7 +127,8 @@ npm run dev
 | `POST` | `/api/auth/register` | Register a new user |
 | `POST` | `/api/auth/login` | Log in and obtain a JWT |
 | `POST` | `/api/documents/upload` | Upload a document and run verification |
-| `GET`  | `/api/documents/{id}` | Get full verification results |
+| `GET`  | `/api/documents/{id}` | Get full verification results (per-branch beliefs) |
+| `POST` | `/api/documents/{id}/feedback` | Submit a reviewer's ground-truth label (calibration) |
 | `GET`  | `/api/documents/{id}/audit` | Get the audit-trail record |
 | `GET`  | `/api/history` | List past verifications |
 | `GET`  | `/api/dashboard/stats` | Aggregate dashboard statistics |
@@ -118,19 +143,23 @@ MDAV/
 ├── frontend/                 # Next.js 14 + TypeScript + Tailwind
 │   └── src/
 │       ├── app/              # Pages: upload, results, history, dashboard
-│       ├── components/       # React components (e.g. Navbar)
+│       ├── components/       # BranchScoreBars, BranchEvidence, ScoreRing, ...
 │       ├── lib/              # API client
 │       └── types/            # Shared TypeScript types
 ├── backend/                  # FastAPI + Python
-│   └── app/
-│       ├── routes/           # auth, documents, dashboard endpoints
-│       ├── services/         # OCR, vision, semantic, signature, fusion, audit
-│       ├── models/           # SQLAlchemy models & Pydantic schemas
-│       └── utils/            # JWT auth, hashing
-├── ml_service/               # Standalone ML inference + training
-│   ├── model.py              # Visual tamper detector
-│   └── train.py              # Training pipeline
-├── docs/                     # Documentation
+│   ├── app/
+│   │   ├── routes/           # auth, documents (+ feedback), dashboard
+│   │   ├── services/         # belief, fusion, vision, layout, aadhaar_qr,
+│   │   │                     #   diffusion, semantic, signature, ocr, audit,
+│   │   │                     #   reliability_calibrator
+│   │   ├── models/           # SQLAlchemy models & Pydantic schemas
+│   │   └── utils/            # JWT auth, hashing
+│   ├── scripts/              # calibrate_reliability.py (champion/challenger)
+│   └── tests/                # belief, fusion, qr, calibrator (pytest)
+├── ml_service/               # Standalone visual-model inference microservice
+├── models/                   # Trained weights (git-ignored) — see models/README.md
+├── notebooks/                # Training notebooks (Kaggle/Colab)
+├── docs/                     # Docs incl. AIForge_Agent_Brief.md
 ├── MDAV_Project_Doc_Pack/    # PRD, HLD, LLD, ML design, testing, deployment
 ├── test_samples/             # Sample documents
 └── docker-compose.yml
@@ -139,9 +168,10 @@ MDAV/
 ## Tech Stack
 
 - **Frontend** — Next.js 14, TypeScript, Tailwind CSS, Recharts, Axios
-- **Backend** — FastAPI, SQLAlchemy, PostgreSQL, JWT (python-jose), Pydantic v2
-- **ML / CV** — PyTorch, EfficientNet-B0, PaddleOCR, OpenCV
-- **Signatures** — pyHanko, cryptography (X.509)
+- **Backend** — FastAPI, SQLAlchemy, PostgreSQL/SQLite, JWT (python-jose), Pydantic v2
+- **ML / CV** — PyTorch, segmentation-models-pytorch (DocTamper U-Net), Ultralytics YOLOv8, jpegio (DCT), PaddleOCR, OpenCV
+- **Fusion** — Dempster-Shafer evidence theory + online reliability calibration
+- **Signatures** — pyHanko, cryptography (X.509); Aadhaar Secure-QR (RSA)
 - **Integrity** — SHA-256 hash-chained audit log
 
 ## Documentation

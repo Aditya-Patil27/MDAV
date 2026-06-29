@@ -78,9 +78,15 @@ class FusedResultResponse(BaseModel):
     visual_score: Optional[float]
     semantic_score: Optional[float]
     signature_score: Optional[float]
+    layout_score: Optional[float] = None
+    qr_score: Optional[float] = None
+    diffusion_score: Optional[float] = None
     final_score: Optional[float]
+    conflict: Optional[float] = None
     decision: Optional[str]
     reason_summary: Optional[str]
+    # Per-branch payload (score + belief + detail) for generic UI rendering.
+    branches: Optional[dict] = None
 
 
 class VerificationResultResponse(BaseModel):
@@ -103,6 +109,12 @@ class AuditLogResponse(BaseModel):
     verification_status: str
     authenticity_score: Optional[float]
     block_hash: Optional[str]
+
+
+class FeedbackRequest(BaseModel):
+    true_label: str  # "authentic" | "forged"
+    reviewer: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class DashboardStats(BaseModel):

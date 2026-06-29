@@ -7,6 +7,8 @@ import DecisionBadge from "@/components/DecisionBadge";
 import ScoreRing from "@/components/ScoreRing";
 import BranchScoreBars from "@/components/BranchScoreBars";
 import AuditTrail from "@/components/AuditTrail";
+import BranchEvidence from "@/components/BranchEvidence";
+import type { BranchInfo } from "@/types";
 
 interface VerificationResult {
   document_id: string;
@@ -43,9 +45,14 @@ interface VerificationResult {
     visual_score: number;
     semantic_score: number;
     signature_score: number;
+    layout_score?: number | null;
+    qr_score?: number | null;
+    diffusion_score?: number | null;
     final_score: number;
+    conflict?: number | null;
     decision: string;
     reason_summary: string;
+    branches?: Record<string, BranchInfo> | null;
   } | null;
   created_at: string;
 }
@@ -110,8 +117,6 @@ function ResultsContent() {
     );
   }
 
-  const signaturePresent = result.signature?.signature_detected ?? false;
-
   return (
     <div className="mx-auto max-w-5xl px-4 py-10">
       <h1 className="mb-1 text-2xl font-bold text-gray-900">Verification Results</h1>
@@ -140,8 +145,17 @@ function ResultsContent() {
 
           {result.fused && (
             <div className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
-              <h3 className="mb-4 text-sm font-semibold text-gray-900">Score Breakdown</h3>
-              <BranchScoreBars fused={result.fused} signaturePresent={signaturePresent} />
+              <h3 className="mb-1 text-sm font-semibold text-gray-900">Branch Breakdown</h3>
+              <p className="mb-4 text-xs text-gray-400">
+                Dempster-Shafer fusion · P(authentic) per branch
+              </p>
+              <BranchScoreBars fused={result.fused} />
+              {result.fused.conflict != null && result.fused.conflict >= 0.05 && (
+                <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-amber-600">
+                  Inter-branch conflict K = {(result.fused.conflict * 100).toFixed(0)}% — sources
+                  partly disagree.
+                </p>
+              )}
             </div>
           )}
 
@@ -174,6 +188,19 @@ function ResultsContent() {
                     </span>
                   </div>
                   <p className="mt-3 text-sm text-gray-600">{result.vision.explanation}</p>
+                  {result.vision.heatmap_path && (
+                    <div className="mt-3">
+                      <p className="mb-1 text-xs font-medium text-gray-500">Tamper heatmap</p>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`/files/heatmaps/${result.vision.heatmap_path
+                          .split(/[\\/]/)
+                          .pop()}`}
+                        alt="Tamper localization heatmap"
+                        className="w-full rounded-lg border border-gray-100"
+                      />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="text-sm text-gray-500">No visual analysis available</p>
@@ -262,6 +289,13 @@ function ResultsContent() {
               )}
             </div>
           </div>
+
+          {result.fused?.branches && (
+            <BranchEvidence
+              branches={result.fused.branches}
+              only={["qr", "layout", "diffusion"]}
+            />
+          )}
 
           {id && <AuditTrail documentId={id} />}
         </div>

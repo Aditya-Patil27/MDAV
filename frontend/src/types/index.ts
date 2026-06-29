@@ -41,13 +41,38 @@ export interface SignatureResult {
   details: Record<string, unknown>;
 }
 
+export type BranchStatus = "active" | "inactive" | "mock" | "pending" | "error";
+
+export interface BranchBelief {
+  authentic: number;
+  forged: number;
+  uncertain: number;
+  belief?: number;
+  plausibility?: number;
+  pignistic?: number;
+  source?: string;
+}
+
+export interface BranchInfo {
+  label: string;
+  score: number;
+  belief: BranchBelief | null;
+  status: BranchStatus;
+  detail: Record<string, unknown>;
+}
+
 export interface FusedResult {
   visual_score: number;
   semantic_score: number;
   signature_score: number;
+  layout_score?: number | null;
+  qr_score?: number | null;
+  diffusion_score?: number | null;
   final_score: number;
+  conflict?: number | null;
   decision: "APPROVED" | "FLAGGED" | "REVIEW_REQUIRED";
   reason_summary: string;
+  branches?: Record<string, BranchInfo> | null;
 }
 
 export interface DashboardStats {

@@ -18,10 +18,14 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/mdav
       - JWT_SECRET=mdav-dev-secret-key
       - STORAGE_PATH=/app/storage
+      - MDAV_VISION_WEIGHTS=/app/models/best.pth
+      - MDAV_LAYOUT_WEIGHTS=/app/models/best_layout_detector.pt
     depends_on:
       - db
     volumes:
       - ./storage:/app/storage
+      # Place best.pth and best_layout_detector.pt under ./models on the host.
+      - ./models:/app/models
 
   db:
     image: postgres:15

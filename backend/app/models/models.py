@@ -121,12 +121,34 @@ class FusedResult(Base):
     visual_score = Column(Float)
     semantic_score = Column(Float)
     signature_score = Column(Float)
+    layout_score = Column(Float)
+    qr_score = Column(Float)
+    diffusion_score = Column(Float)
     final_score = Column(Float)
+    conflict = Column(Float)
     decision = Column(String(50))
     reason_summary = Column(Text)
+    # Per-branch payload (score + belief masses + branch-specific details) so the
+    # frontend can render every branch generically, including new ones.
+    branches = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     job = relationship("VerificationJob", back_populates="fused_result")
+
+
+class ReviewFeedback(Base):
+    """Human-confirmed ground truth for a verification, used to calibrate the
+    Dempster-Shafer source reliabilities. ``true_label`` is 'authentic'|'forged'."""
+
+    __tablename__ = "review_feedback"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    job_id = Column(String, ForeignKey("verification_jobs.id"), index=True)
+    document_id = Column(String, ForeignKey("documents.id"))
+    true_label = Column(String(20), nullable=False)
+    reviewer = Column(String(255))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AuditLog(Base):

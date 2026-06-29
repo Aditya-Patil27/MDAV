@@ -35,9 +35,14 @@ export interface VerificationResult {
     visual_score: number;
     semantic_score: number;
     signature_score: number;
+    layout_score?: number | null;
+    qr_score?: number | null;
+    diffusion_score?: number | null;
     final_score: number;
+    conflict?: number | null;
     decision: string;
     reason_summary: string;
+    branches?: Record<string, unknown> | null;
   } | null;
   created_at: string;
 }
