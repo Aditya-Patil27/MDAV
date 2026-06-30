@@ -1,0 +1,33 @@
+# MDAV Migration Progress
+
+- Baseline: CodeGraph healthy (30 files, 388 symbols, 514 edges); primary blast radius mapped across `main.py`, builder, generator, prompt, padding/paste, field selection, progress, metadata, validator, setup scripts, and tests.
+- API decision: use official `diffusers.FluxFillPipeline` with NF4 `BitsAndBytesConfig` applied separately to `FluxTransformer2DModel` and `transformers.T5EncoderModel`; keep the small CLIP/VAE components in fp16 and enable CPU offload. Target `diffusers>=0.38.0`.
+- Human prerequisite: `black-forest-labs/FLUX.1-Fill-dev` is gated. Kaggle users must accept its Hugging Face license and provide `HF_TOKEN`; the project will not bypass the gate.
+- Task 1 done: removed `src/comfy_generator.py`, `workflows/flux_fill.json`, and `run_colab.py`; active imports now target Diffusers.
+- Task 2 done: added lazy cached `DiffusersGenerator` with bbox-only expanded masks, NF4 transformer/T5 loading, CPU offload, env configuration, and deterministic CPU `torch.Generator`.
+- Task 3 done: `src/prompt_builder.py` now uses semantic masked-edit instructions with no visual marker language.
+- Task 4 done: `src/utils.py`, `src/builder.py`, and `src/crop_paste.py` now use source-pixel padding, exact unpadding, and feathered compositing with no generation-path resizing.
+- Task 5 done: variant field selection, `_v{index}_forged` IDs, variant progress keys, sorted global seeds, sharding, and CLI options are implemented.
+- Task 6 done: `MetadataIndex` provides one-time cold-start CSV indexing and O(1) resume, append, duplicate, and validation lookups.
+- Task 7 done: replaced Colab/ComfyUI setup with pinned Diffusers dependencies and `setup_kaggle.py` for HF login, gated snapshot caching, and GPU/VRAM reporting.
+- Task 8 done: updated backend, padding, feathering, variants, progress, statistics, scheduling, and obsolete-backend tests; 20 tests pass.
+- Deviation: this workspace has no `.git` directory, so no migration commits can be created.
+- Verification: CodeGraph has no obsolete backend symbols; active Python has no obsolete backend tokens; compileall, CLI help, and all 20 tests pass.
+- Open items: validate one real NF4 inference and Korean-aware OCR selection on Kaggle.
+- External runtime prerequisite: accept the gated FLUX.1-Fill-dev license and set `HF_TOKEN`; local 4GB GPU verification intentionally did not load model weights.
+- OCR follow-up: `setup_kaggle.py` now installs Tesseract English and Korean language packs (`tesseract-ocr-eng`, `tesseract-ocr-kor`) before Python dependencies; OCR language selection remains a separate open item.
+- Kaggle disk fix: setup now caches `diffusers/FLUX.1-Fill-dev-nf4` (~13 GB) plus only the small scheduler/tokenizer/CLIP/VAE files from the gated base model; the 58 GB full checkpoint download is excluded. Runtime loads the serialized NF4 transformer and T5 directly.
+- Kaggle pilot follow-up: shortened the semantic edit prompt to stay below CLIP's 77-token limit, made inference honor `KAGGLE_MODEL_CACHE`, and preserved cumulative retry counts when rebuilding final statistics.
+- Value-localization Task 1 done: `src/cord_loader.py` uses CORD `is_key` words for label/value metadata and value-only geometry while preserving full-line field text.
+- Value-localization Tasks 2-3 done: builder mutates `extra["value_text"]` when present and reconstructs the complete forged line; no mutator internals changed.
+- Value-localization Task 4 done: added strict `src/ocr_locator.py`; builder fails closed before generation when exact, confidence-qualified value localization fails.
+- Value-localization Tasks 5-6 done: narrow value text/bbox now drive prompt, FLUX mask, feathered paste, binary mask, and OCR verification; full text remains in annotations/metadata.
+- Value-localization Task 7 done: added CORD, locator, confidence, unavailable-OCR, fail-closed builder, and narrowed-generator regression coverage; 31 tests pass.
+- Verification: CodeGraph healthy at 32 files/424 symbols; structural searches show affected production imports only in builder, and its indexed source confirms value-only arguments. Compileall and all 31 tests pass.
+- Deviation: progress entries were consolidated after the interdependent red-green cycle instead of after each numbered item; CodeGraph imported-call edge lookup returned no edges, so final confirmation used CodeGraph structural search plus the indexed builder function source.
+- Open item: run a real CORD Kaggle pilot with the updated archive to measure Tesseract localization confidence and FLUX numeric rendering quality; Korean OCR language selection remains separate.
+- Kaggle OCR diagnosis: CORD `503,000` was misread as `505,000` by PSM 7 but read exactly by PSM 8 with a numeric whitelist across original/autocontrast/2x/3x trials; resizing was therefore rejected as unnecessary.
+- Numeric OCR fallback done: `src/ocr_config.py` supplies PSM 7 first and strict PSM 8 numeric-whitelist fallback to both locator and verifier; exact matching and locator confidence checks remain mandatory.
+- Numeric OCR tests done: locator bbox recovery and verifier acceptance cover the observed PSM 7 misread/PSM 8 exact-read case; open item is rerunning `cord_000001_train` on Kaggle through FLUX.
+- CORD trusted-geometry fallback done: loader marks non-empty `is_key`-derived value geometry with `value_bbox_source="cord_is_key"`; builder logs field-level fallback and uses it only for provenance-qualified CORD fields when all strict OCR passes fail.
+- CORD fallback safeguards: empty values, missing label provenance, non-CORD fields, and unmarked CORD fields still fail closed; post-generation OCR verification remains mandatory on the mutated value bbox.

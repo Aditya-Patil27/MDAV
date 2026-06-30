@@ -27,6 +27,15 @@ The slot already exists and currently returns a "vacuous" (no-evidence) belief:
 [`backend/app/services/diffusion_service.py`](../backend/app/services/diffusion_service.py).
 Your job is to (a) train the model and (b) implement two methods in that file.
 
+**Dataset generator is already built** — it lives in [`aiforge/`](../aiforge/) (the
+"AIForge Document Forgery Dataset Generator"). It loads document datasets (CORD,
+FUNSD, SROIE, XFUND), mutates field values, and **inpaints the edited region with
+FLUX.1-Fill-dev** (NF4-quantized, diffusion), producing **paired (forged image,
+binary tamper mask)** samples — mask values `0` = authentic, `255` = tampered,
+exact image size (`aiforge/src/mask_generator.py`). Run it on Kaggle to produce
+the training set. **Because the labels are per-pixel masks, the detector should
+be a segmentation model** (see §4).
+
 ---
 
 ## 2. The integration contract (do not deviate)
@@ -109,9 +118,14 @@ If the contract is clear, wiring `_predict` is ~20 lines.
 - **Negatives:** clean scans + *classically* tampered docs (so AIForge learns to
   fire on generative artifacts specifically, not on any edit — the visual branch
   already owns classical tampering).
-- **Output choice:** a whole-image **classifier** (real vs AI-generated, sigmoid)
-  is the simplest valid contract and the default this slot expects. A localizer
-  (per-pixel mask) is also fine — just provide the mask→scalar aggregation.
+- **Output choice — segmentation (primary).** The `aiforge/` generator emits
+  per-pixel tamper masks, so train a **segmentation model** that outputs an
+  AI-forgery mask (same shape as the DocTamper visual branch: 2-channel logits or
+  1-channel sigmoid at image resolution). In `_predict`, aggregate the mask to a
+  scalar exactly like `vision_service._aggregate` (e.g. high-percentile of the
+  positive map + area ratio) → that scalar is `ai_forgery_prob`. A whole-image
+  classifier is an acceptable fallback but throws away the mask supervision you
+  already have.
 - **Privacy:** no real ID PII. Use synthetic/template IDs only.
 
 ---
@@ -135,11 +149,13 @@ If the contract is clear, wiring `_predict` is ~20 lines.
 > `backend/app/services/diffusion_service.py` and `vision_service.py` first.
 >
 > Deliver:
-> 1. A training notebook/script that trains an AI-generated-content detector for
->    ID documents. Use Stable-Diffusion **inpainting** over synthetic ID templates
->    as the primary positive class (paired clean originals as negatives); add a
->    public AI-gen set for robustness. **No real ID PII.** Save a `.pth`
->    (state-dict, or full checkpoint with weights under `"model"`).
+> 1. A training notebook/script (Kaggle) that trains a **segmentation** detector
+>    for AI-generated/inpainted regions in ID documents. The dataset generator
+>    already exists in `aiforge/` — it produces paired (forged image, binary
+>    tamper mask) samples via FLUX.1-Fill inpainting; run it on Kaggle to build
+>    the set. Train on those masks (per-pixel AI-forgery target). **No real ID
+>    PII.** Save a `.pth` (state-dict, or full checkpoint with weights under
+>    `"model"`).
 > 2. A one-page `MODEL_CONTRACT.md`: exact `nn.Module` code, input size + RGB/BGR
 >    + normalization, any frequency/DCT/noise stream, output (sigmoid/softmax,
 >    shape, AI-gen index), torch version, and a 10-line `predict()` snippet.

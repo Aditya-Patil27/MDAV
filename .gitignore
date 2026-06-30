@@ -18,3 +18,13 @@ ml_service/data/*
 *.pt
 *.pth
 runs/
+
+# AIForge generator (aiforge/) — track the code, never the generated data,
+# input datasets, or the multi-GB FLUX model cache.
+aiforge/AIForge_Dataset/
+aiforge/outputs/
+aiforge/datasets/
+aiforge/.cache/
+aiforge/**/progress.json
+aiforge/**/metadata.csv
+aiforge/**/statistics.json
