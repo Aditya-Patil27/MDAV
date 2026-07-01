@@ -68,3 +68,47 @@ def test_reliability_discount_weakens_unreliable_source():
     strong = fusion.fuse({"signature": from_check(False, w_fail=0.8, source="signature")})
     weak = fusion.fuse({"layout": from_check(False, w_fail=0.8, source="layout")})
     assert strong["final_score"] < weak["final_score"]  # signature drives forged harder
+
+
+def _diffusion(ai_forgery_prob: float, confidence: float):
+    # Mirrors diffusion_service.analyze: belief = from_probability(1 - prob).
+    return from_probability(1.0 - ai_forgery_prob, confidence=confidence, source="diffusion")
+
+
+def test_diffusion_hot_map_overrides_soft_authentic_pile():
+    # A pile of weak authentic branches...
+    branches = {
+        "semantic": from_check(True, w_pass=0.55, source="semantic"),
+        "layout": from_check(True, w_pass=0.40, source="layout"),
+        "visual": from_probability(0.6, confidence=0.4, source="visual"),
+        # ...versus a confident AIForge AI-forgery hit.
+        "diffusion": _diffusion(ai_forgery_prob=0.97, confidence=0.9),
+    }
+    out = fusion.fuse(branches)
+    assert out["diffusion_score"] < 0.5      # branch itself leans forged
+    assert out["final_score"] < 0.5
+    assert out["decision"] == "REVIEW_REQUIRED"
+
+
+def test_diffusion_catches_what_visual_misses():
+    # DocTamper visual branch sees nothing (leans authentic), but the AIForge
+    # branch flags diffusion-inpainting -> the fused decision must not approve.
+    branches = {
+        "visual": from_probability(0.7, confidence=0.6, source="visual"),
+        "diffusion": _diffusion(ai_forgery_prob=0.9, confidence=0.85),
+    }
+    out = fusion.fuse(branches)
+    assert out["final_score"] < 0.5
+    assert out["decision"] != "APPROVED"
+
+
+def test_clean_doc_visual_and_diffusion_agree_approve():
+    branches = {
+        "signature": from_check(True, w_pass=0.90, source="signature"),
+        "visual": from_probability(0.95, confidence=0.9, source="visual"),
+        "diffusion": _diffusion(ai_forgery_prob=0.03, confidence=0.9),
+    }
+    out = fusion.fuse(branches)
+    assert out["diffusion_score"] > 0.5      # branch leans authentic
+    assert out["final_score"] >= 0.80
+    assert out["decision"] == "APPROVED"
