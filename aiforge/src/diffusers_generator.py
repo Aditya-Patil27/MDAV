@@ -157,12 +157,27 @@ class DiffusersGenerator(ImageGenerator):
         )
 
         if self.device.startswith("cuda"):
-            try:
-                pipeline.enable_model_cpu_offload()
-                logger.info("Enabled Diffusers model CPU offload")
-            except (AttributeError, RuntimeError) as exc:
-                logger.warning("Model CPU offload failed (%s); using sequential offload", exc)
-                pipeline.enable_sequential_cpu_offload()
+            # FLUX_NO_OFFLOAD=1 keeps the (NF4-quantised ~13 GB) weights resident
+            # on the GPU instead of shuttling them from CPU RAM every step. This is
+            # (a) much faster (no per-step host<->device copies) and (b) uses far
+            # less *host* RAM -- essential when running one shard per GPU in
+            # parallel, where two CPU-offloaded pipelines would exceed Kaggle's
+            # ~30 GB RAM and OOM-kill the second shard. Falls back to offload if it
+            # does not fit in VRAM.
+            if os.environ.get("FLUX_NO_OFFLOAD") == "1":
+                try:
+                    pipeline.to(self.device)
+                    logger.info("Weights resident on GPU (FLUX_NO_OFFLOAD=1)")
+                except RuntimeError as exc:  # incl. torch CUDA OutOfMemoryError
+                    logger.warning("No-offload load failed (%s); using CPU offload", exc)
+                    pipeline.enable_model_cpu_offload()
+            else:
+                try:
+                    pipeline.enable_model_cpu_offload()
+                    logger.info("Enabled Diffusers model CPU offload")
+                except (AttributeError, RuntimeError) as exc:
+                    logger.warning("Model CPU offload failed (%s); using sequential offload", exc)
+                    pipeline.enable_sequential_cpu_offload()
         else:
             pipeline.to(self.device)
 
