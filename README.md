@@ -52,7 +52,7 @@ Upload ─▶ Layout (YOLO) ─▶ field crops ─▶ OCR ─▶ ┌─ Semantic
 | **Layout** | Localizes Aadhaar fields; crops feed OCR | YOLOv8n (Ultralytics) |
 | **OCR + Semantic** | Extracts fields; validates Aadhaar (Verhoeff)/PAN/dates | PaddleOCR + rule validator |
 | **Visual** | Per-pixel *classical* tamper localization (copy-move/splice) | DCT+RGB ResNet18 U-Net (DocTamper) |
-| **AIForge** | AI-generated / diffusion-inpainted content *(branch slot — model WIP)* | PyTorch *(see [`docs/AIForge_Agent_Brief.md`](docs/AIForge_Agent_Brief.md))* |
+| **AIForge** | AI-generated / diffusion-synthesised content | Pretrained HF image classifier (`models/diffusion/`) — swappable via `MDAV_DIFFUSION_MODEL` |
 | **Secure QR** | Decodes the signed Aadhaar QR, cross-checks vs printed fields | UIDAI Secure QR v2 + RSA |
 | **Signature** | Detects & validates embedded digital signatures | pyHanko · cryptography |
 
@@ -91,6 +91,23 @@ parameters are learned.
 
 ## Quick Start
 
+### Step 0 — Place model weights (do this first)
+
+Weights are **git-ignored**; put them under `models/` before running. The app
+still runs without them — any branch with a missing model just degrades to a
+**vacuous** belief (contributes nothing) and the pipeline continues.
+
+| Path | Branch | How to get it |
+|------|--------|---------------|
+| `models/best.pth` | Visual (DocTamper) | handed over separately / train via [`notebooks/train_visual_doctamper.ipynb`](notebooks/train_visual_doctamper.ipynb) |
+| `models/best_layout_detector.pt` | Layout (YOLOv8n) | handed over separately / [`notebooks/train_layout_yolo.ipynb`](notebooks/train_layout_yolo.ipynb) |
+| `models/diffusion/` (folder) | AIForge (AI-generated) | download 3 files — see [`models/diffusion/README.md`](models/diffusion/README.md) (default Apache-2.0 `Ateeqq/ai-vs-human-image-detector`) |
+
+The `models/diffusion/` folder needs **`model.safetensors` + `config.json` +
+`preprocessor_config.json`** together. Docker mounts `./models` into the backend
+automatically; local runs read the paths from `backend/.env`
+(`MDAV_DIFFUSION_MODEL=./models/diffusion`).
+
 ### Using Docker (recommended)
 
 ```bash
@@ -118,6 +135,22 @@ uvicorn app.main:app --reload
 cd frontend
 npm install
 npm run dev
+```
+
+### Verify it's running
+
+```bash
+curl http://localhost:8000/health          # -> {"status":"healthy"}
+```
+
+Then in the UI (http://localhost:3000): register/login, upload a document, and
+check the result. Each branch card shows its status — the **AIForge** card should
+read **`active`** (not `pending`) once `models/diffusion/` is populated. Missing a
+weight file just shows that branch inactive; everything else still works.
+
+Run the test suite:
+```bash
+cd backend && pytest -q
 ```
 
 ## API

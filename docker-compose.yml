@@ -20,6 +20,9 @@ services:
       - STORAGE_PATH=/app/storage
       - MDAV_VISION_WEIGHTS=/app/models/best.pth
       - MDAV_LAYOUT_WEIGHTS=/app/models/best_layout_detector.pt
+      # AI-generated forgery branch: folder with model.safetensors + config.json
+      # + preprocessor_config.json (see models/diffusion/README.md).
+      - MDAV_DIFFUSION_MODEL=/app/models/diffusion
     depends_on:
       - db
     volumes:
