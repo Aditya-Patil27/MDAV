@@ -85,3 +85,16 @@ main.py
 - Added `requirements.txt` for Python dependencies only and updated path helpers to honor `BASE_DIR` and `OUTPUT_DIR`.
 - Obsolete file removed: `src/puter_generator.py`.
 - Remaining work: validate the ComfyUI workflow against a live FLUX Fill install in Colab, confirm model downloads/patching on first-run environments, and then clean up any final doc references to the old browser backend.
+
+## 2026-07-01 Canonical Working Implementation
+
+- The historical Puter and ComfyUI descriptions above are retained only as migration history. Neither backend is active.
+- The active generator is `src/diffusers_generator.py`, using Diffusers FLUX.1-Fill-dev with serialized NF4 transformer/T5 components and CPU model offload for Kaggle T4 compatibility.
+- CORD fields use `is_key` to preserve full annotation text while narrowing edit geometry to value words; CORD language metadata is `ko`.
+- OCR uses Tesseract through shared `src/ocr_config.py`: PSM 7 generally and a numeric-whitelist PSM 8 pass for numeric values. PaddleOCR is not part of the generator requirements.
+- `MDAV_OCR_VERIFY` supports `strict` (exact requested value), `changed` (original value absent), and `off`. `changed` improves throughput but may create image/annotation value disagreement and must be reported as a benchmark limitation.
+- FLUX mask expansion, feathered compositing, and binary tamper-mask expansion use the same configurable margin.
+- Failed OCR generations save cropped region, placement preview, and JSON diagnostics under `_failed/` unless `MDAV_SAVE_FAILED=0`.
+- The complete workload is 7,126 variants with two variants per document. A 20-step T4 pilot averaged about 158 seconds per accepted sample after model load.
+- Running two CPU-offloaded FLUX processes in one Kaggle T4x2 notebook exhausted host RAM. Run one process per notebook or distribute shards across separate notebooks/accounts.
+- The generator now lives at `aiforge/` inside the canonical MDAV product repository. Root `project_context.md` and `progress_context.md` describe the current consolidated state.

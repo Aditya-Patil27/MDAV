@@ -98,8 +98,14 @@ def test_from_probability_respects_confidence():
 
 def test_decide_thresholds():
     assert decide(from_probability(0.95)) == "APPROVED"
-    assert decide(from_probability(0.6)) == "FLAGGED"
-    assert decide(from_probability(0.2)) == "REVIEW_REQUIRED"
+    assert decide(from_probability(0.6)) == "REVIEW_REQUIRED"
+    assert decide(from_probability(0.2)) == "FLAGGED"
+
+
+def test_decide_vacuous_and_conflicted_evidence_requires_review():
+    assert decide(vacuous()) == "REVIEW_REQUIRED"
+    authentic = from_probability(0.95)
+    assert decide(authentic, conflict=0.4) == "REVIEW_REQUIRED"
 
 
 def test_fuse_empty_is_vacuous():

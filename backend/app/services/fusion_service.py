@@ -12,16 +12,18 @@ so a weak branch dilutes toward "don't know" instead of actively voting 0.5.
 A single conclusive forensic signal (broken signature, QR/printed mismatch)
 therefore still dominates a pile of soft heuristics, which is the project thesis.
 
-The output keys (``visual_score``/``semantic_score``/``signature_score``/
-``final_score``/``decision``/``reason_summary``) are kept identical to the old
-contract so the DB models, schemas, and frontend need no changes. Each
-per-branch ``*_score`` is now that branch's pignistic P(authentic).
+The legacy output keys (``visual_score``/``semantic_score``/
+``signature_score``/``final_score``/``decision``/``reason_summary``) remain for
+API compatibility. Rich fields make their meaning explicit: raw branch mass,
+source reliability, discounted branch mass, final fused mass, and the exact
+decision-score formula.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal, ROUND_HALF_UP
 
 from app.services import belief
 from app.services.belief import BeliefMass, vacuous
@@ -39,7 +41,20 @@ _DEFAULT_RELIABILITY = {
     "layout": 0.40,
 }
 
-_DEFAULT_THRESHOLDS = {"approved": 0.80, "flagged": 0.50}
+_DEFAULT_THRESHOLDS = {
+    "approved": 0.80,
+    "flagged": 0.50,
+    "max_uncertainty": 0.35,
+    "max_conflict": 0.30,
+}
+
+SCORE_FORMULA = "pignistic_authenticity_v1"
+
+
+def _format_percentage(value: float) -> str:
+    """Format stored four-decimal masses like the frontend's one-decimal display."""
+    percent = Decimal(str(round(float(value), 4))) * Decimal("100")
+    return f"{percent.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)}%"
 
 # Champion config written by the calibrator (see reliability_calibrator.py).
 FUSION_CONFIG_PATH = os.getenv(
@@ -70,7 +85,11 @@ RELIABILITY, THRESHOLDS = load_fusion_config()
 
 
 class FusionService:
-    def fuse(self, branches: dict[str, BeliefMass]) -> dict:
+    def fuse(
+        self,
+        branches: dict[str, BeliefMass],
+        branch_metadata: dict[str, dict] | None = None,
+    ) -> dict:
         """Fuse a mapping of ``source -> raw BeliefMass`` into a decision dict.
 
         Vacuous / missing branches contribute nothing. The raw (undiscounted)
@@ -79,10 +98,31 @@ class FusionService:
         """
         branches = {k: v for k, v in branches.items() if v is not None}
 
-        discounted = [
-            m.discount(RELIABILITY.get(src, 0.5))
-            for src, m in branches.items()
-        ]
+        branch_metadata = branch_metadata or {}
+        discounted_by_source = {
+            src: mass.discount(RELIABILITY.get(src, 0.5))
+            for src, mass in branches.items()
+        }
+        fusion_inputs = dict(discounted_by_source)
+        correlation_adjusted = False
+        visual_mass = discounted_by_source.get("visual")
+        diffusion_mass = discounted_by_source.get("diffusion")
+        if (
+            visual_mass is not None
+            and diffusion_mass is not None
+            and visual_mass.uncertain < 0.999
+            and diffusion_mass.uncertain < 0.999
+        ):
+            # Both localizers consume related RGB/DCT image evidence. Averaging
+            # their discounted masses prevents one scan artifact from being
+            # counted twice by Dempster's independence assumption.
+            fusion_inputs.pop("visual")
+            fusion_inputs.pop("diffusion")
+            fusion_inputs["image_forensics"] = self._average_dependent_evidence(
+                visual_mass, diffusion_mass
+            )
+            correlation_adjusted = True
+        discounted = list(fusion_inputs.values())
         try:
             fused = belief.fuse(discounted) if discounted else vacuous("fusion")
             conflict = float(fused.details.get("conflict", 0.0))
@@ -92,60 +132,164 @@ class FusionService:
             conflict = 1.0
 
         final_score = fused.pignistic()
-        if conflict >= 1.0:
-            decision = "REVIEW_REQUIRED"
-        else:
-            decision = belief.decide(
-                fused,
-                approve_threshold=THRESHOLDS["approved"],
-                review_threshold=THRESHOLDS["flagged"],
-            )
+        decision = belief.decide(
+            fused,
+            approve_threshold=THRESHOLDS["approved"],
+            review_threshold=THRESHOLDS["flagged"],
+            max_uncertainty=THRESHOLDS["max_uncertainty"],
+            max_conflict=THRESHOLDS["max_conflict"],
+            conflict=conflict,
+        )
 
-        scores = {src: m.pignistic() for src, m in branches.items()}
-        reason = self._reason(branches, scores, decision, conflict)
+        raw_scores = {src: mass.pignistic() for src, mass in branches.items()}
+        discounted_scores = {
+            src: mass.pignistic() for src, mass in discounted_by_source.items()
+        }
+        branch_evidence = {
+            src: {
+                "raw_mass": branches[src].to_dict(),
+                "reliability": round(RELIABILITY.get(src, 0.5), 4),
+                "discounted_mass": discounted_by_source[src].to_dict(),
+                "raw_pignistic_authenticity": round(raw_scores[src], 4),
+                "discounted_pignistic_authenticity": round(
+                    discounted_scores[src], 4
+                ),
+                "correlation_group": (
+                    "image_forensics"
+                    if correlation_adjusted and src in {"visual", "diffusion"}
+                    else None
+                ),
+                "fusion_input": (
+                    "image_forensics"
+                    if correlation_adjusted and src in {"visual", "diffusion"}
+                    else src
+                ),
+            }
+            for src in branches
+        }
+        reason = self._reason(
+            discounted_by_source,
+            decision,
+            conflict,
+            fused,
+            branch_metadata,
+            correlation_adjusted=correlation_adjusted,
+        )
+
+        def display_score(source: str):
+            value = discounted_scores.get(source)
+            return round(value, 4) if value is not None else None
 
         return {
-            "visual_score": round(scores.get("visual", 0.5), 4),
-            "semantic_score": round(scores.get("semantic", 0.5), 4),
-            "signature_score": round(scores.get("signature", 0.5), 4),
-            "layout_score": round(scores.get("layout", 0.5), 4),
-            "qr_score": round(scores.get("qr", 0.5), 4),
-            "diffusion_score": round(scores.get("diffusion", 0.5), 4),
+            "visual_score": display_score("visual"),
+            "semantic_score": display_score("semantic"),
+            "signature_score": display_score("signature"),
+            "layout_score": display_score("layout"),
+            "qr_score": display_score("qr"),
+            "diffusion_score": display_score("diffusion"),
             "final_score": round(final_score, 4),
+            "decision_score": round(final_score, 4),
+            "score_formula": SCORE_FORMULA,
+            "authentic_mass": round(fused.authentic, 4),
+            "forged_mass": round(fused.forged, 4),
+            "uncertainty_mass": round(fused.uncertain, 4),
             "decision": decision,
             "reason_summary": reason,
             "fused_belief": fused.to_dict(),
             "conflict": round(conflict, 4),
+            "branch_evidence": branch_evidence,
+            "decision_thresholds": dict(THRESHOLDS),
         }
+
+    @staticmethod
+    def _average_dependent_evidence(
+        first: BeliefMass, second: BeliefMass
+    ) -> BeliefMass:
+        """Cautiously combine related sources without independence amplification."""
+        return BeliefMass(
+            authentic=(first.authentic + second.authentic) / 2.0,
+            forged=(first.forged + second.forged) / 2.0,
+            uncertain=(first.uncertain + second.uncertain) / 2.0,
+            source="image_forensics",
+            details={"members": [first.source, second.source]},
+        )
 
     # ---- reasoning -----------------------------------------------------------
 
-    def _reason(self, branches, scores, decision, conflict) -> str:
-        parts: list[str] = []
+    def _reason(
+        self,
+        discounted: dict[str, BeliefMass],
+        decision: str,
+        conflict: float,
+        fused: BeliefMass,
+        metadata: dict[str, dict],
+        *,
+        correlation_adjusted: bool = False,
+    ) -> str:
         labels = {
             "visual": "Visual tamper analysis",
             "semantic": "Field/checksum validation",
             "signature": "Digital signature",
             "qr": "Secure QR cross-check",
             "layout": "Document layout",
+            "diffusion": "AI-forgery localization",
         }
-        for src, mass in branches.items():
-            if mass.uncertain > 0.95:  # effectively vacuous -> nothing to say
-                continue
-            p = scores[src]
-            verdict = (
-                "supports authenticity" if p >= 0.65
-                else "indicates tampering" if p <= 0.35
-                else "is inconclusive"
+        committed = [
+            (src, mass)
+            for src, mass in discounted.items()
+            if mass.uncertain < 0.999
+        ]
+        unavailable = [
+            labels.get(src, src)
+            for src, info in metadata.items()
+            if info.get("status") in {"unavailable", "error"}
+        ]
+        not_applicable = [
+            labels.get(src, src)
+            for src, info in metadata.items()
+            if info.get("status") == "not_applicable"
+        ]
+
+        parts: list[str] = []
+        if committed:
+            auth_src, auth_mass = max(committed, key=lambda item: item[1].authentic)
+            forged_src, forged_mass = max(committed, key=lambda item: item[1].forged)
+            if auth_mass.authentic >= 0.05:
+                parts.append(
+                    f"Strongest authentic support is {labels.get(auth_src, auth_src)} "
+                    f"at {_format_percentage(auth_mass.authentic)} belief"
+                )
+            if forged_mass.forged >= 0.05:
+                parts.append(
+                    f"Strongest forged support is {labels.get(forged_src, forged_src)} "
+                    f"at {_format_percentage(forged_mass.forged)} belief"
+                )
+        else:
+            parts.append("No branch produced committed evidence")
+
+        if unavailable:
+            parts.append(f"Unavailable branches: {', '.join(unavailable)}")
+        if not_applicable:
+            parts.append(
+                f"Not-applicable branches contributed no evidence: "
+                f"{', '.join(not_applicable)}"
             )
-            parts.append(f"{labels.get(src, src)} {verdict} (P={p:.2f})")
+        if correlation_adjusted:
+            parts.append(
+                "Visual and AI-forgery localization were correlation-adjusted before fusion"
+            )
+        parts.append(f"Fused uncertainty is {_format_percentage(fused.uncertain)}")
+        if conflict > 0:
+            parts.append(f"inter-branch conflict is {_format_percentage(conflict)}")
 
-        if not parts:
-            parts.append("No branch produced decisive evidence")
-        if conflict >= 0.3:
-            parts.append(f"sources partly conflict (K={conflict:.2f})")
-
-        return ". ".join(parts) + f". Overall assessment: {decision}."
+        if decision == "APPROVED":
+            conclusion = "The authentic-belief threshold was met with limited uncertainty and conflict"
+        elif decision == "FLAGGED":
+            conclusion = "The forged-belief threshold was met with limited uncertainty and conflict"
+        else:
+            conclusion = "Human review is required because evidence is incomplete, mixed, or below a decisive threshold"
+        parts.append(conclusion)
+        return ". ".join(parts) + "."
 
 
 fusion_service = FusionService()

@@ -1,0 +1,4 @@
+# Keep Docker Desktop builds CPU-only. The general requirements remain usable
+# in CUDA-enabled environments such as Kaggle.
+torch==2.4.0+cpu
+torchvision==0.19.0+cpu

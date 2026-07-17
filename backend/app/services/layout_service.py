@@ -69,7 +69,7 @@ class LayoutService:
             return self._result(
                 detections=[], mass=vacuous(source="layout"),
                 reason=f"Layout model unavailable ({self._load_failed_reason or 'no weights'})",
-                mock=True,
+                mock=True, status="unavailable",
             )
 
         try:
@@ -77,13 +77,28 @@ class LayoutService:
         except Exception as e:  # noqa: BLE001
             return self._result(
                 detections=[], mass=vacuous(source="layout"),
-                reason=f"Layout detection could not run: {e}", mock=False,
+                reason=f"Layout detection could not run: {e}", mock=False, status="error",
             )
 
         mass = self._score(detections)
         return self._result(
             detections=detections, mass=mass,
-            reason=self._reason(detections), mock=False,
+            reason=self._reason(detections), mock=False, status="active",
+        )
+
+    def for_document_context(self, result: dict, document_type: str) -> dict:
+        """Keep Aadhaar crops for OCR but suppress Aadhaar-only fusion on other IDs."""
+        if document_type in {"unknown", "aadhaar"}:
+            return result
+        return self._result(
+            detections=[],
+            mass=vacuous(source="layout"),
+            reason=(
+                "The available layout detector is trained for Aadhaar fields and "
+                f"does not contribute structural evidence for {document_type}."
+            ),
+            mock=bool(result.get("mock", False)),
+            status="not_applicable",
         )
 
     # ---- detection -----------------------------------------------------------
@@ -132,12 +147,13 @@ class LayoutService:
         labels = sorted({d["label"] for d in detections})
         return f"Detected layout fields: {', '.join(labels)}."
 
-    def _result(self, *, detections, mass: BeliefMass, reason, mock) -> dict:
+    def _result(self, *, detections, mass: BeliefMass, reason, mock, status) -> dict:
         return {
             "fields_detected": [d["label"] for d in detections],
             "detections": detections,
             "reason": reason,
             "mock": mock,
+            "status": status,
             "belief": mass.to_dict(),
             "_mass": mass,
         }

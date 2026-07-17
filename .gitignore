@@ -1,8 +1,19 @@
 node_modules/
 .next/
+out/
+frontend/artifacts/
 .env
 *.pyc
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+htmlcov/
+.coverage
+coverage.xml
+*.tsbuildinfo
+notebookd*.ipynb
 storage/
 models/*.pt
 .env.local
@@ -17,14 +28,17 @@ ml_service/data/*
 # Model weights & training outputs — handed over separately, never committed
 *.pt
 *.pth
+*.ckpt
 *.safetensors
-runs/
-# Downloaded diffusion-branch model files (folder mounted at /app/models/diffusion);
-# keep the README/.gitkeep, ignore the heavy downloaded weights/config.
+models/*.pt
+models/*.pth
+models/*.ckpt
+models/*.safetensors
 models/diffusion/*
 !models/diffusion/README.md
 models/diffusion_sdxl/*
 !models/diffusion_sdxl/README.md
+runs/
 
 # AIForge generator (aiforge/) — track the code, never the generated data,
 # input datasets, or the multi-GB FLUX model cache.
@@ -35,3 +49,9 @@ aiforge/.cache/
 aiforge/**/progress.json
 aiforge/**/metadata.csv
 aiforge/**/statistics.json
+
+# Local benchmark/training data and one-off generated artifacts.
+AIForge_MDAV/
+.tmp_pip_meta/
+paper_assets/
+.vscode/

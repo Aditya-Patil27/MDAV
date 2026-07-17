@@ -108,12 +108,21 @@ class BeliefMass:
         uncertain = (u1 * u2) / norm
 
         src = "+".join(s for s in (self.source, other.source) if s)
+        previous_conflict = max(
+            float(self.details.get("conflict", 0.0)),
+            float(other.details.get("conflict", 0.0)),
+        )
+        cumulative_conflict = 1.0 - (1.0 - previous_conflict) * (1.0 - conflict)
         return BeliefMass(
             authentic=authentic,
             forged=forged,
             uncertain=uncertain,
             source=src,
-            details={"conflict": conflict, **self.details, **other.details},
+            details={
+                **self.details,
+                **other.details,
+                "conflict": cumulative_conflict,
+            },
         )
 
     # ---- serialisation -------------------------------------------------------
@@ -208,11 +217,22 @@ def decide(
     *,
     approve_threshold: float = 0.80,
     review_threshold: float = 0.50,
+    max_uncertainty: float = 0.35,
+    max_conflict: float = 0.30,
+    conflict: float = 0.0,
 ) -> str:
-    """Map a fused belief to a decision using the pignistic probability."""
-    p = mass.pignistic()
-    if p >= approve_threshold:
+    """Map fused evidence to an applicability-aware document decision.
+
+    ``review_threshold`` is retained as a backwards-compatible argument name,
+    but now represents the minimum forged mass required to flag a document.
+    High uncertainty or conflict always routes to human review. This prevents a
+    vacuous mass (whose pignistic score is mechanically 0.5) from being treated
+    as either authentic or forged evidence.
+    """
+    if mass.uncertain >= max_uncertainty or conflict >= max_conflict:
+        return "REVIEW_REQUIRED"
+    if mass.authentic >= approve_threshold:
         return "APPROVED"
-    if p >= review_threshold:
+    if mass.forged >= review_threshold:
         return "FLAGGED"
     return "REVIEW_REQUIRED"

@@ -1,14 +1,15 @@
-version: '3.8'
-
 services:
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        BACKEND_INTERNAL_URL: http://backend:8000
     ports:
       - "3000:3000"
     depends_on:
       - backend
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - BACKEND_INTERNAL_URL=http://backend:8000
 
   backend:
     build: ./backend
@@ -20,15 +21,17 @@ services:
       - STORAGE_PATH=/app/storage
       - MDAV_VISION_WEIGHTS=/app/models/best.pth
       - MDAV_LAYOUT_WEIGHTS=/app/models/best_layout_detector.pt
-      # AI-generated forgery branch: folder with model.safetensors + config.json
-      # + preprocessor_config.json (see models/diffusion/README.md).
-      - MDAV_DIFFUSION_MODEL=/app/models/diffusion
+      - MDAV_DIFFUSION_WEIGHTS=/app/models/best_diffusion.pth
+      - MDAV_DIFFUSION_THRESHOLD=0.95
+      # Optional local Transformers classifier fallback; unset by default.
+      # - MDAV_DIFFUSION_MODEL=/app/models/diffusion
     depends_on:
       - db
     volumes:
       - ./storage:/app/storage
-      # Place best.pth and best_layout_detector.pt under ./models on the host.
+      # Canonical checkpoints live under ./models on the host.
       - ./models:/app/models
+      - paddleocr_cache:/root/.paddleocr
 
   db:
     image: postgres:15
@@ -46,7 +49,8 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ./ml_service/models:/app/models
+      - ./models:/app/models:ro
 
 volumes:
   pgdata:
+  paddleocr_cache:

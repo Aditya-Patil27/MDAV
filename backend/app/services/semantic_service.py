@@ -12,7 +12,17 @@ class SemanticValidator:
             "field_presence": self._validate_field_presence,
         }
 
-    def validate(self, extracted_fields: dict) -> dict:
+    def validate(
+        self,
+        extracted_fields: dict,
+        *,
+        document_type: str = "unknown",
+        document_side: str = "unknown",
+        document_type_confidence: float = 0.0,
+        ocr_confidence: float = 0.0,
+        layout_available: bool = False,
+        field_evidence: dict | None = None,
+    ) -> dict:
         results = {
             "aadhaar_valid": None,
             "pan_valid": None,
@@ -20,21 +30,32 @@ class SemanticValidator:
             "field_presence_valid": None,
             "consistency_score": 0.0,
             "validation_details": {},
+            "status": "inconclusive",
+        }
+        rule_statuses: dict[str, str] = {
+            "aadhaar": "not_applicable",
+            "pan": "not_applicable",
+            "dates": "not_evaluated",
+            "field_presence": "not_evaluated",
         }
 
         if "aadhaar" in extracted_fields:
             results["aadhaar_valid"] = self._validate_aadhaar(extracted_fields["aadhaar"])
             results["validation_details"]["aadhaar"] = {
-                "number": extracted_fields["aadhaar"],
+                "number": self._mask_identifier(extracted_fields["aadhaar"]),
                 "valid": results["aadhaar_valid"],
             }
+            rule_statuses["aadhaar"] = (
+                "valid" if results["aadhaar_valid"] else "invalid"
+            )
 
         if "pan" in extracted_fields:
             results["pan_valid"] = self._validate_pan(extracted_fields["pan"])
             results["validation_details"]["pan"] = {
-                "number": extracted_fields["pan"],
+                "number": self._mask_identifier(extracted_fields["pan"]),
                 "valid": results["pan_valid"],
             }
+            rule_statuses["pan"] = "valid" if results["pan_valid"] else "invalid"
 
         if "dates" in extracted_fields:
             results["dates_valid"] = self._validate_dates(extracted_fields["dates"])
@@ -42,12 +63,34 @@ class SemanticValidator:
                 "found": extracted_fields["dates"],
                 "valid": results["dates_valid"],
             }
+            rule_statuses["dates"] = (
+                "valid" if results["dates_valid"] else "invalid"
+            )
 
-        results["field_presence_valid"] = self._validate_field_presence(extracted_fields)
+        field_presence, field_detail = self._validate_field_presence(
+            extracted_fields,
+            document_type=document_type,
+            document_side=document_side,
+            document_type_confidence=document_type_confidence,
+            ocr_confidence=ocr_confidence,
+            layout_available=layout_available,
+            field_evidence=field_evidence,
+        )
+        results["field_presence_valid"] = field_presence
         results["validation_details"]["field_presence"] = {
             "fields_found": list(extracted_fields.keys()),
-            "valid": results["field_presence_valid"],
+            "valid": field_presence,
+            **field_detail,
         }
+        rule_statuses["field_presence"] = field_detail["status"]
+        results["validation_details"]["document_context"] = {
+            "document_type": document_type,
+            "side": document_side,
+            "confidence": round(float(document_type_confidence), 4),
+            "layout_available": bool(layout_available),
+            "ocr_confidence": round(float(ocr_confidence), 4),
+        }
+        results["validation_details"]["rule_statuses"] = rule_statuses
 
         scores = []
         for key in ["aadhaar_valid", "pan_valid", "dates_valid", "field_presence_valid"]:
@@ -55,6 +98,10 @@ class SemanticValidator:
                 scores.append(1.0 if results[key] else 0.0)
 
         results["consistency_score"] = sum(scores) / len(scores) if scores else 0.5
+        if any(status == "invalid" for status in rule_statuses.values()):
+            results["status"] = "active"
+        elif any(status == "valid" for status in rule_statuses.values()):
+            results["status"] = "active"
 
         return results
 
@@ -70,23 +117,38 @@ class SemanticValidator:
         """
         evidence = []
         # Verhoeff failure is near-conclusive; passing is only weak support.
-        if validation_result.get("aadhaar_valid") is not None:
+        rule_statuses = (
+            validation_result.get("validation_details", {}).get("rule_statuses", {})
+        )
+        if (
+            validation_result.get("aadhaar_valid") is not None
+            and rule_statuses.get("aadhaar") in {None, "valid", "invalid"}
+        ):
             evidence.append(from_check(
                 validation_result["aadhaar_valid"],
                 w_pass=0.55, w_fail=0.95, source="semantic.aadhaar",
             ))
         # PAN format is a regex -> a forger trivially satisfies it; weak both ways.
-        if validation_result.get("pan_valid") is not None:
+        if (
+            validation_result.get("pan_valid") is not None
+            and rule_statuses.get("pan") in {None, "valid", "invalid"}
+        ):
             evidence.append(from_check(
                 validation_result["pan_valid"],
                 w_pass=0.40, w_fail=0.75, source="semantic.pan",
             ))
-        if validation_result.get("dates_valid") is not None:
+        if (
+            validation_result.get("dates_valid") is not None
+            and rule_statuses.get("dates") in {None, "valid", "invalid"}
+        ):
             evidence.append(from_check(
                 validation_result["dates_valid"],
                 w_pass=0.35, w_fail=0.70, source="semantic.dates",
             ))
-        if validation_result.get("field_presence_valid") is not None:
+        if (
+            validation_result.get("field_presence_valid") is not None
+            and rule_statuses.get("field_presence") in {None, "valid", "invalid"}
+        ):
             evidence.append(from_check(
                 validation_result["field_presence_valid"],
                 w_pass=0.25, w_fail=0.55, source="semantic.fields",
@@ -167,10 +229,84 @@ class SemanticValidator:
 
         return True
 
-    def _validate_field_presence(self, fields: dict) -> bool:
-        required_fields = ["name"]
-        found_fields = set(fields.keys())
-        return any(f in found_fields for f in required_fields)
+    def _validate_field_presence(
+        self,
+        fields: dict,
+        *,
+        document_type: str,
+        document_side: str,
+        document_type_confidence: float,
+        ocr_confidence: float,
+        layout_available: bool,
+        field_evidence: dict | None = None,
+    ) -> tuple[bool | None, dict]:
+        required_by_context = {
+            ("aadhaar", "front"): {"aadhaar", "name", "dates"},
+            ("aadhaar", "back"): {"aadhaar", "address"},
+            ("aadhaar", "combined"): {"aadhaar", "name", "dates", "address"},
+            ("pan", "unknown"): {"pan", "name"},
+        }
+
+        if document_type_confidence < 0.65 or document_type == "unknown":
+            return None, {
+                "status": "not_evaluated",
+                "reason": "Document type is not established confidently.",
+                "expected_fields": [],
+                "missing_fields": [],
+            }
+        if document_type == "aadhaar" and document_side == "unknown":
+            return None, {
+                "status": "not_evaluated",
+                "reason": "Aadhaar side could not be established.",
+                "expected_fields": [],
+                "missing_fields": [],
+            }
+
+        expected = required_by_context.get((document_type, document_side))
+        if expected is None:
+            expected = required_by_context.get((document_type, "unknown"))
+        if not expected:
+            return None, {
+                "status": "not_applicable",
+                "reason": "No side-specific required-field rule is configured.",
+                "expected_fields": [],
+                "missing_fields": [],
+            }
+
+        found = set(fields)
+        missing = sorted(expected - found)
+        if not missing:
+            return True, {
+                "status": "valid",
+                "reason": "All fields expected for the detected type and side were found.",
+                "expected_fields": sorted(expected),
+                "missing_fields": [],
+            }
+        field_evidence = field_evidence or {}
+        covered_missing = {
+            field: field_evidence[field]
+            for field in missing
+            if field in field_evidence
+        }
+        return None, {
+            "status": "not_evaluated",
+            "reason": (
+                "Expected fields were not extracted. OCR omission is treated as "
+                "incomplete evidence, not a document contradiction."
+            ),
+            "expected_fields": sorted(expected),
+            "missing_fields": missing,
+            "covered_missing_fields": sorted(covered_missing),
+            "field_evidence": covered_missing,
+        }
+
+    @staticmethod
+    def _mask_identifier(value) -> str:
+        text = str(value or "")
+        compact = "".join(text.split())
+        if len(compact) <= 4:
+            return compact
+        return f"{'*' * (len(compact) - 4)}{compact[-4:]}"
 
 
 semantic_validator = SemanticValidator()

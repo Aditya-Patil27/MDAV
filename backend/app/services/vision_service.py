@@ -26,6 +26,7 @@ import os
 import tempfile
 
 from app.services.belief import BeliefMass, from_probability, vacuous
+from app.services.localization_evidence import summarize_positive_regions
 
 # Checkpoint location. Defaults to the repo-root file the user provides; override
 # with MDAV_VISION_WEIGHTS (the Docker image mounts it under /app/models).
@@ -45,6 +46,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 # host does not OOM. Multiple of 8 keeps the DCT block grid aligned.
 _MAX_SIDE = 1536
 _STRIDE = 32                # smp Unet requires H, W divisible by 32 (>= 8 for DCT)
+_IDENTITY_DOCUMENT_TYPES = {"aadhaar", "pan", "passport", "driving_licence"}
 
 
 def _build_model():
@@ -115,7 +117,7 @@ class VisionService:
 
     # ---- public API ----------------------------------------------------------
 
-    def analyze(self, image_path: str) -> dict:
+    def analyze(self, image_path: str, *, document_type: str = "unknown") -> dict:
         """Return a vision result dict (+ ``_mass`` BeliefMass) for ``image_path``."""
         if self.model is None:
             return self._mock_analysis(reason=self._load_failed_reason)
@@ -125,13 +127,44 @@ class VisionService:
         except Exception as e:  # noqa: BLE001 - unreadable/odd input -> stay vacuous
             mass = vacuous(source="visual")
             return self._result(
-                tamper_prob=0.5, confidence=0.0, mass=mass,
+                tamper_prob=None, confidence=0.0, mass=mass,
                 explanation=f"Visual analysis could not run: {e}",
-                heatmap_path=None, mock=False,
+                heatmap_path=None, mock=False, status="error",
             )
 
         tamper_prob, confidence, area = self._aggregate(prob_map)
         heatmap_path = self._save_heatmap(prob_map, image_path)
+        details = dict(self._last_prediction_details)
+        if not details.get("positive_region_detected", True):
+            mass = BeliefMass(
+                authentic=0.0,
+                forged=0.0,
+                uncertain=1.0,
+                source="visual",
+                details=details,
+            )
+            return self._result(
+                tamper_prob=None,
+                confidence=0.0,
+                mass=mass,
+                explanation=(
+                    "No coherent visual-tamper region reached the operating threshold; "
+                    "the branch contributed no forged evidence."
+                ),
+                heatmap_path=heatmap_path,
+                mock=False,
+                status="inconclusive",
+            )
+
+        confidence, domain_limited = self._apply_domain_confidence_cap(
+            confidence, document_type
+        )
+        if domain_limited:
+            details["domain_limited"] = True
+            details["model_limitation"] = (
+                "The visual localizer requires identity-document calibration for "
+                "photographs, holograms, and security-print artifacts."
+            )
 
         # Calibrated belief: p(authentic) = 1 - tamper_prob, committed in
         # proportion to the model's confidence; the rest stays uncertain.
@@ -139,12 +172,14 @@ class VisionService:
             1.0 - tamper_prob,
             confidence=confidence,
             source="visual",
-            details={"tampered_area_ratio": round(area, 4)},
+            details=details,
         )
         return self._result(
             tamper_prob=tamper_prob, confidence=confidence, mass=mass,
-            explanation=self._explain(tamper_prob, area),
-            heatmap_path=heatmap_path, mock=False,
+            explanation=self._explain(
+                tamper_prob, area, domain_limited=domain_limited
+            ),
+            heatmap_path=heatmap_path, mock=False, status="active",
         )
 
     # ---- inference -----------------------------------------------------------
@@ -223,26 +258,38 @@ class VisionService:
         return rgb_t, dct_t
 
     def _aggregate(self, prob_map):
-        """Collapse the pixel map to (tamper_probability, confidence, area_ratio).
-
-        A localization model should flag a document when a *confident region*
-        exists, so the document score is a high quantile of the map (robust to a
-        few hot pixels) rather than the mean, which a small forgery would dilute.
-        ``area_ratio`` is the fraction of pixels predicted tampered.
-        """
+        """Collapse a pixel map only after a coherent positive region exists."""
         import numpy as np
 
         H, W = getattr(self, "_last_valid", prob_map.shape)
         m = prob_map[:H, :W]
         if m.size == 0:
             return 0.5, 0.0, 0.0
-        peak = float(np.quantile(m, 0.995))
-        area = float((m >= 0.5).mean())
-        tamper_prob = max(peak, min(1.0, area * 4.0))  # large tampered area also drives it up
-        tamper_prob = float(min(1.0, max(0.0, tamper_prob)))
-        # Confidence: decisive maps (clearly hot or clearly cold) -> high.
-        confidence = float(min(1.0, abs(tamper_prob - 0.5) * 2.0 * 0.6 + 0.4))
-        return tamper_prob, confidence, area
+        threshold = float(os.getenv("MDAV_VISUAL_PIXEL_THRESHOLD", "0.80"))
+        min_component_pixels = max(
+            1, int(os.getenv("MDAV_VISUAL_MIN_COMPONENT_PIXELS", "16"))
+        )
+        region = summarize_positive_regions(
+            m,
+            threshold=threshold,
+            min_component_pixels=min_component_pixels,
+        )
+        self._last_prediction_details = {
+            "threshold": threshold,
+            "max_prob": float(m.max()),
+            "high_quantile": float(np.quantile(m, 0.995)),
+            "model_type": "doctamper_segmentation",
+            **region,
+        }
+        if not region["positive_region_detected"]:
+            return 0.0, 0.0, float(region["threshold_area"])
+
+        tamper_prob = float(region["largest_component_quantile"])
+        margin = (tamper_prob - threshold) / (1.0 - threshold)
+        area_scale = max(min_component_pixels * 8, m.size * 0.002)
+        area_support = min(1.0, float(region["largest_component_pixels"]) / area_scale)
+        confidence = float(min(1.0, max(0.0, 0.20 + 0.50 * margin + 0.30 * area_support)))
+        return tamper_prob, confidence, float(region["largest_component_area"])
 
     def _save_heatmap(self, prob_map, image_path: str):
         try:
@@ -263,36 +310,57 @@ class VisionService:
     # ---- mock fallback -------------------------------------------------------
 
     def _mock_analysis(self, reason: str | None = None) -> dict:
-        """Vacuous belief + flagged-mock scores when the model is unavailable."""
+        """Return explicit unavailability with vacuous evidence."""
         mass = vacuous(source="visual")
         return self._result(
-            tamper_prob=0.5, confidence=0.0, mass=mass,
+            tamper_prob=None, confidence=0.0, mass=mass,
             explanation=(
                 "Visual model unavailable (" + (reason or "no weights") + "); "
                 "branch contributes no evidence."
             ),
-            heatmap_path=None, mock=True,
+            heatmap_path=None, mock=True, status="unavailable",
         )
 
     # ---- helpers -------------------------------------------------------------
 
-    def _explain(self, tamper_prob: float, area: float) -> str:
+    def _apply_domain_confidence_cap(
+        self, confidence: float, document_type: str
+    ) -> tuple[float, bool]:
+        if document_type not in _IDENTITY_DOCUMENT_TYPES:
+            return confidence, False
+        cap = float(os.getenv("MDAV_IDENTITY_FORENSICS_CONFIDENCE_CAP", "0.25"))
+        cap = min(1.0, max(0.0, cap))
+        return min(confidence, cap), True
+
+    def _explain(
+        self, tamper_prob: float, area: float, *, domain_limited: bool = False
+    ) -> str:
         if tamper_prob < 0.3:
-            return "No significant tampering detected by the visual localizer."
-        if tamper_prob < 0.6:
-            return f"Minor visual anomalies detected (~{area*100:.1f}% of pixels). Manual review advised."
-        if tamper_prob < 0.8:
-            return f"Significant tampering localized over ~{area*100:.1f}% of the document."
-        return f"Strong tampering signal localized over ~{area*100:.1f}% of the document."
+            message = "No significant tampering detected by the visual localizer."
+        elif tamper_prob < 0.6:
+            message = (
+                f"Minor visual anomalies detected (~{area*100:.1f}% of pixels). "
+                "Manual review advised."
+            )
+        elif tamper_prob < 0.8:
+            message = f"Significant tampering localized over ~{area*100:.1f}% of the document."
+        else:
+            message = f"Strong tampering signal localized over ~{area*100:.1f}% of the document."
+        if domain_limited:
+            return message + " Identity-document confidence is limited pending calibration."
+        return message
 
     def _result(self, *, tamper_prob, confidence, mass: BeliefMass, explanation,
-                heatmap_path, mock) -> dict:
+                heatmap_path, mock, status) -> dict:
         return {
-            "tamper_probability": round(float(tamper_prob), 4),
+            "tamper_probability": (
+                round(float(tamper_prob), 4) if tamper_prob is not None else None
+            ),
             "confidence": round(float(confidence), 4),
             "heatmap_path": heatmap_path,
             "explanation": explanation,
             "mock": mock,
+            "status": status,
             "belief": mass.to_dict(),
             "_mass": mass,
         }

@@ -1,32 +1,41 @@
-# models/diffusion/  —  AI-generated forgery branch weights
+# Optional Hugging Face Classifier Fallback
 
-Drop the pretrained detector's **3 files** here (this exact folder). The backend
-loads them via `MDAV_DIFFUSION_MODEL=/app/models/diffusion` (Docker) or
-`./models/diffusion` (local) — see `backend/app/services/diffusion_service.py`.
+The preferred AIForge backend is the local segmentation checkpoint:
 
-Put these together in this directory:
-
+```text
+models/best_diffusion.pth
+MDAV_DIFFUSION_WEIGHTS=/app/models/best_diffusion.pth
 ```
+
+`backend/app/services/diffusion_service.py` can also load a real-versus-AI
+image classifier, but only when `MDAV_DIFFUSION_MODEL` is explicitly set and
+the segmentation checkpoint cannot load. There is no default Hub model and no
+network download during normal backend startup.
+
+For an offline classifier fallback, place a complete Transformers model folder
+here and configure:
+
+```text
+MDAV_DIFFUSION_MODEL=../models/diffusion
+```
+
+The directory normally includes:
+
+```text
 models/diffusion/
-├── model.safetensors
-├── config.json
-└── preprocessor_config.json
+|-- model.safetensors
+|-- config.json
+`-- preprocessor_config.json
 ```
 
-## Where to get them
+Potential source models include
+[Ateeqq/ai-vs-human-image-detector](https://huggingface.co/Ateeqq/ai-vs-human-image-detector/tree/main)
+(Apache-2.0) and
+[Organika/sdxl-detector](https://huggingface.co/Organika/sdxl-detector/tree/main)
+(CC-BY-NC; non-commercial). Review each model's license before use. The
+selected model's `id2label` must identify an AI, fake, generated, synthetic,
+GAN, or diffusion class.
 
-**Default — Apache-2.0 (commercial-safe):** [Ateeqq/ai-vs-human-image-detector](https://huggingface.co/Ateeqq/ai-vs-human-image-detector/tree/main)
-- https://huggingface.co/Ateeqq/ai-vs-human-image-detector/resolve/main/model.safetensors
-- https://huggingface.co/Ateeqq/ai-vs-human-image-detector/resolve/main/config.json
-- https://huggingface.co/Ateeqq/ai-vs-human-image-detector/resolve/main/preprocessor_config.json
-
-**Alt — diffusion/SDXL-specialised (CC-BY-NC, non-commercial):** [Organika/sdxl-detector](https://huggingface.co/Organika/sdxl-detector/tree/main) (same 3 filenames).
-
-## Notes
-
-- All **3 files** are required — `transformers` needs `config.json` to know the
-  architecture; the weights alone won't load.
-- The files are git-ignored (only this README is tracked) — never commit the 372 MB weights.
-- If this folder is empty/absent, the branch degrades gracefully to a **vacuous**
-  belief (contributes nothing) and the pipeline still runs.
-- To swap models later, just replace the files here — no code change.
+All files except this README are git-ignored. If the segmentation checkpoint,
+fallback files, dependencies, or compatible labels are unavailable, the branch
+emits vacuous belief and verification continues.

@@ -1,5 +1,10 @@
 # AIForge Branch — Agent Brief
 
+> **Implementation status (2026-07-08):** The AIForge segmentation checkpoint
+> is integrated at `models/best_diffusion.pth`. Its authoritative runtime
+> contract is [`models/MODEL_CONTRACT_AIFORGE.md`](../models/MODEL_CONTRACT_AIFORGE.md).
+> The remaining text is retained as the original handoff specification.
+
 **Mission:** build the **AI/diffusion-forgery detector** ("AIForge") and deliver it
 so it drops into MDAV's existing `diffusion_service` slot with zero changes to the
 fusion layer, API, or frontend.

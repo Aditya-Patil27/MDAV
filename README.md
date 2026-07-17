@@ -52,7 +52,7 @@ Upload ─▶ Layout (YOLO) ─▶ field crops ─▶ OCR ─▶ ┌─ Semantic
 | **Layout** | Localizes Aadhaar fields; crops feed OCR | YOLOv8n (Ultralytics) |
 | **OCR + Semantic** | Extracts fields; validates Aadhaar (Verhoeff)/PAN/dates | PaddleOCR + rule validator |
 | **Visual** | Per-pixel *classical* tamper localization (copy-move/splice) | DCT+RGB ResNet18 U-Net (DocTamper) |
-| **AIForge** | AI-generated / diffusion-synthesised content | Pretrained HF image classifier (`models/diffusion/`) — swappable via `MDAV_DIFFUSION_MODEL` |
+| **AIForge** | Localizes AI-generated / diffusion-inpainted regions | DCT+RGB ResNet18 U-Net (`models/best_diffusion.pth`) |
 | **Secure QR** | Decodes the signed Aadhaar QR, cross-checks vs printed fields | UIDAI Secure QR v2 + RSA |
 | **Signature** | Detects & validates embedded digital signatures | pyHanko · cryptography |
 
@@ -91,22 +91,30 @@ parameters are learned.
 
 ## Quick Start
 
-### Step 0 — Place model weights (do this first)
+### Model weights
 
-Weights are **git-ignored**; put them under `models/` before running. The app
-still runs without them — any branch with a missing model just degrades to a
-**vacuous** belief (contributes nothing) and the pipeline continues.
+Weights are git-ignored and supplied separately. Place the trained files under
+`models/` before running the corresponding branches:
 
-| Path | Branch | How to get it |
-|------|--------|---------------|
-| `models/best.pth` | Visual (DocTamper) | handed over separately / train via [`notebooks/train_visual_doctamper.ipynb`](notebooks/train_visual_doctamper.ipynb) |
-| `models/best_layout_detector.pt` | Layout (YOLOv8n) | handed over separately / [`notebooks/train_layout_yolo.ipynb`](notebooks/train_layout_yolo.ipynb) |
-| `models/diffusion/` (folder) | AIForge (AI-generated) | download 3 files — see [`models/diffusion/README.md`](models/diffusion/README.md) (default Apache-2.0 `Ateeqq/ai-vs-human-image-detector`) |
+| Path | Branch | Contract |
+|---|---|---|
+| `models/best.pth` | Classical visual tampering | DocTamper DCT+RGB segmentation |
+| `models/best_layout_detector.pt` | Aadhaar layout | YOLOv8n field detector |
+| `models/best_diffusion.pth` | AIForge diffusion tampering | [`models/MODEL_CONTRACT_AIFORGE.md`](models/MODEL_CONTRACT_AIFORGE.md) |
 
-The `models/diffusion/` folder needs **`model.safetensors` + `config.json` +
-`preprocessor_config.json`** together. Docker mounts `./models` into the backend
-automatically; local runs read the paths from `backend/.env`
-(`MDAV_DIFFUSION_MODEL=./models/diffusion`).
+AIForge prefers the local segmentation checkpoint with pixel threshold `0.95`.
+An explicitly configured `MDAV_DIFFUSION_MODEL` may be used as a Hugging Face
+classifier fallback from a local Transformers directory, but no classifier is
+downloaded by default. Missing weights or optional ML dependencies produce
+vacuous belief and do not stop verification.
+
+Both pixel-localization branches require a coherent above-threshold connected
+region before they contribute forged evidence. The bundled AIForge validation
+set covers receipt/form edits, so Aadhaar, PAN, passport, and driving-licence
+predictions are confidence-limited by default until identity-document
+calibration data is evaluated. Configure the relevant `MDAV_*_COMPONENT_*` and
+`MDAV_IDENTITY_FORENSICS_CONFIDENCE_CAP` values in `backend/.env` only after
+measuring document-level false-positive rates.
 
 ### Using Docker (recommended)
 
@@ -137,21 +145,20 @@ npm install
 npm run dev
 ```
 
-### Verify it's running
+### Verify AIForge is available
+
+The AIForge branch becomes active when `models/best_diffusion.pth` and its
+optional inference dependencies are present. From `backend/`, inspect one image
+without starting the API server:
 
 ```bash
-curl http://localhost:8000/health          # -> {"status":"healthy"}
+python -m scripts.check_aiforge_model ../test_samples/your_document.png
 ```
 
-Then in the UI (http://localhost:3000): register/login, upload a document, and
-check the result. Each branch card shows its status — the **AIForge** card should
-read **`active`** (not `pending`) once `models/diffusion/` is populated. Missing a
-weight file just shows that branch inactive; everything else still works.
-
-Run the test suite:
-```bash
-cd backend && pytest -q
-```
+The script reports the selected weights path, threshold, branch status, and
+AI-forgery evidence. A `pending` result is intentional when the model or a
+native optional dependency is absent: the rest of the verification pipeline
+still runs with vacuous diffusion belief.
 
 ## API
 
